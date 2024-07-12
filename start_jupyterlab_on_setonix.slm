@@ -21,8 +21,8 @@ export SINGULARITYENV_PREPEND_PATH=/srv/conda/envs/notebook/bin:/srv/conda/conda
 export SINGULARITYENV_XDG_DATA_HOME=$MYSCRATCH/.local
 
 # Set the Docker image (including tag)
-image="docker://mrayson/jupyter_sfoda:20230825"
- 
+image="docker://ghcr.io/benwibking/jupyterlab-setonix:main"
+
 
 ####
 # You should not need to edit the lines below
