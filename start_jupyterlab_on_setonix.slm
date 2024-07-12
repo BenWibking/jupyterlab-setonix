@@ -1,0 +1,126 @@
+#!/bin/bash -l
+#SBATCH --account=pawsey0807
+#SBATCH --partition=work
+#SBATCH --ntasks=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=8
+#SBATCH --time=02:00:00
+#SBATCH --job-name=jupyterlab
+#SBATCH --output=jupyter-%j.out
+#SBATCH --export=NONE
+
+# Set the working directory
+# This is the directory mounted to /home/jovyan in the container
+# This needs to have enough storage for the whole container image (at least 2 GiB)
+notebook_dir=${MYSCRATCH}/notebooks
+
+export SINGULARITY_BINDPATH=$MYSOFTWARE:$MYSOFTWARE,$MYSCRATCH:$MYSCRATCH,/run:/run,$HOME:$HOME 
+
+# This is needed to setup conda in the container correctly
+export SINGULARITYENV_PREPEND_PATH=/srv/conda/envs/notebook/bin:/srv/conda/condabin:/srv/conda/bin
+export SINGULARITYENV_XDG_DATA_HOME=$MYSCRATCH/.local
+
+# Set the Docker image (including tag)
+image="docker://mrayson/jupyter_sfoda:20230825"
+ 
+
+####
+# You should not need to edit the lines below
+####
+
+
+# Prepare the working directory
+mkdir -p ${notebook_dir}
+cd ${notebook_dir}
+ 
+# Get the image filename
+imagename=${image##*/}
+imagename=${imagename/:/_}.sif
+ 
+# Get the hostname of the setonix node
+# We'll set up an SSH tunnel to connect to the JuypterLab server
+host=$(hostname)
+ 
+# Load Singularity from the module system on Setonix
+module load singularity/4.1.0-slurm
+
+# Pull our image in a folder
+singularity pull $imagename $image
+echo $imagename $image
+
+### Pangeo method for running notebooks
+# Create trap to kill JupyterLab when user is done
+kill_server() {
+    if [[ $JNPID != -1 ]]; then
+        echo -en "\nKilling JupyterLab Server with PID=$JNPID ... "
+        kill $JNPID
+        echo "done"
+        exit 0
+    else
+        exit 1
+    fi
+}
+
+let DASK_PORT=8787
+let LOCALHOST_PORT=8888
+
+JNHOST=$(hostname)
+LOGFILE=$MYSCRATCH/jupyter_log.$(date +%Y%m%dT%H%M%S)
+
+echo "Logging JupyterLab session to $LOGFILE"
+
+#jupyter notebook $@ --no-browser --ip=$JNHOST >& $LOGFILE &
+
+### Launch container
+### - mount the working directory to /home/jovyan in the container
+### - bind the run time directory to our home directory
+srun --export=ALL -m block:block:block singularity exec \
+  -B ${notebook_dir}:/home/joyvan \
+  -B ${notebook_dir}:${HOME} \
+  ${imagename} \
+  jupyter notebook $@ \
+  --no-browser \
+  --port=${LOCALHOST_PORT} --ip=$JNHOST \
+  --notebook-dir=${notebook_dir} >& $LOGFILE &
+
+JNPID=$!
+
+echo -en "\nStarting JupyterLab server, please wait ... "
+
+ELAPSED=0
+ADDRESS=
+
+while [[ $ADDRESS != *"${JNHOST}"* ]]; do
+    sleep 1
+    ELAPSED=$(($ELAPSED+1))
+    ADDRESS=$(grep -e '\s*http://.*:.*/\?token=.*' $LOGFILE | head -n 1 | awk -F'//' '{print $NF}')
+
+    if [[ $ELAPSED -gt 60 ]]; then
+        echo -e "something went wrong\n---"
+        cat $LOGFILE
+        echo "---"
+        kill_server
+    fi
+done
+
+echo -e "done\n---\n"
+
+HOST=$(echo $ADDRESS | awk -F':' ' { print $1 } ')
+PORT=$(echo $ADDRESS | awk -F':' ' { print $2 } ' | awk -F'/' ' { print $1 } ')
+TOKEN=$(echo $ADDRESS | awk -F'=' ' { print $NF } ')
+
+cat << EOF
+Run the following command on your desktop or laptop:
+    ssh -N -l $USER -L ${LOCALHOST_PORT}:${JNHOST}:$PORT -L $DASK_PORT:${JNHOST}:$DASK_PORT setonix.pawsey.org.au
+Log in with your username/password or SSH keys (there will be no prompt).
+Then open a browser and go to http://localhost:${LOCALHOST_PORT}. The Jupyter web
+interface will ask you for a token. Use the following:
+    $TOKEN
+Note that anyone to whom you give the token can access (and modify/delete)
+your files on Setonix.
+
+To stop the server, press Ctrl-C.
+EOF
+
+# Wait for user kill command
+sleep inf
