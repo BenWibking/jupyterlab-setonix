@@ -1,3 +1,3 @@
 yt
 openpmd-api
-git+https://github.com/BenWibking/plotfile-viewer@c3786417eae3193229e5174ed38f038deeae79e5
+git+https://github.com/BenWibking/plotfile-viewer@b753771c01c3b16b48ac869538454d3c6f873778
